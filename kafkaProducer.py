@@ -1,19 +1,22 @@
 import random
 from datetime import datetime
 import time
+import json
+from bson import json_util
 import sys
 from kafka import KafkaProducer
+import pymongo
 from pymongo import MongoClient
 
 class randomProducer():
     def __init__(self):
-        self.var = 1
-        self.kafkaProd = KafkaProducer(bootstrap_servers='localhost:6667', value_serializer=lambda v: v.encode('utf-8'))
+        self.kafkaProd = KafkaProducer(bootstrap_servers=['localhost1:6667','localhost2:6667'], value_serializer=lambda v: json.dumps(v, default=json_util.default).encode('utf-8'))
         self.client = MongoClient('localhost', 27017)
         self.db = self.client.test_database
-        self.collection = self.db.test_collection
-        self.dummy_id = '59d64264f212d42f020afcf0'
-#
+        self.oplog = self.client.local.oplog.rs
+        self.first = self.oplog.find().sort('$natural', pymongo.ASCENDING).limit(-1).next()
+        self.ts = self.first['ts']
+
     def runProducer(self):
         try:
             while(self.var==1):
@@ -21,18 +24,21 @@ class randomProducer():
                 time.sleep(1+random.random())
         except:
             sys.exit()
-#
+
     def runKafkaProducer(self):
-#        try:
-         while(self.var==1):
-             #for doc in self.collection.find({"_id": {"$gte": dummy_id}}):
-             for doc in self.collection.find({"_id": dummy_id}):
-                 #self.kafkaProd.send('test', doc)
-                 print(doc)
-             time.sleep(1+random.random())
-#        except Exception as e:
-#            print('Error: ' + str(e))
-#            sys.exit()
+        try:
+             while True:
+                 self.cursor = self.oplog.find({'ts': {'$gt': self.ts}},
+                            cursor_type=pymongo.CursorType.TAILABLE_AWAIT,
+                            oplog_replay=True)
+                 for doc in self.cursor:
+                     self.ts = doc['ts']
+                     if doc['ts'].time >= int(time.time()) and '_id' in doc['o']:
+                         print(doc)
+                         self.kafkaProd.send('test', doc)
+        except Exception as e:
+            print('Error: ' + str(e))
+            sys.exit()
 
 
 if __name__ == "__main__":
